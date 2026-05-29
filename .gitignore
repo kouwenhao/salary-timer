@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.spec~
+config.json
+quotes_cache.json
+salaryGet.7z
