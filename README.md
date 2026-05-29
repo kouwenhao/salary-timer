@@ -2,7 +2,7 @@
 
 Windows 桌面悬浮薪资计时器，使用 Python + PyQt6 实现。
 
-当前版本：`1.0.1`
+当前版本：`1.0.2`
 
 云端语录默认读取：
 
@@ -30,7 +30,11 @@ pip install -r requirements.txt
 python main.py
 ```
 
-首次运行会在程序目录生成 `config.json`，用于保存月薪、工作日、工作时间段、窗口位置、折叠状态、透明度、显示模式、云端语录地址和开机自启设置。
+首次运行会在用户配置目录生成 `config.json`，用于保存月薪、工作日、工作时间段、窗口位置、折叠状态、透明度、显示模式、云端语录地址和开机自启设置。Windows 默认位置：
+
+```text
+%APPDATA%\SalaryTimer\config.json
+```
 
 ## 打包为单 exe
 

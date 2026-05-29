@@ -1,5 +1,5 @@
 {
-  "version": "1.0.1",
-  "notes": "修复语录半小时弹出不稳定问题，改为每分钟心跳检查；设置里新增语录间隔，可设为 1 分钟测试。",
+  "version": "1.0.2",
+  "notes": "新增一键下载并安装更新：下载后自动关闭旧版、替换 exe 并启动新版；配置迁移到 AppData，更新不再丢配置。",
   "download_url": "https://github.com/kouwenhao/salary-timer/releases/latest/download/SalaryTimer.exe"
 }

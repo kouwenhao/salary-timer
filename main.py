@@ -4,12 +4,14 @@ import calendar
 import ctypes
 import json
 import math
+import os
 import random
+import shutil
+import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
-import webbrowser
 from dataclasses import dataclass
 from datetime import date, datetime, time as dt_time, timedelta
 from pathlib import Path
@@ -65,7 +67,7 @@ from PyQt6.QtWidgets import (
 )
 
 
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 APP_NAME = "Salary Timer"
 APP_DISPLAY_NAME = f"{APP_NAME} v{APP_VERSION}"
 CONFIG_FILE = "config.json"
@@ -85,10 +87,31 @@ QUOTE_POPUP_DURATION_MS = 30 * 1000
 
 
 def app_base_dir() -> Path:
-    """返回配置文件所在目录：开发时为源码目录，打包后为 exe 所在目录。"""
+    """返回程序所在目录：开发时为源码目录，打包后为 exe 所在目录。"""
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
+
+
+def app_data_dir() -> Path:
+    """返回用户配置目录，避免更新 exe 时丢失同目录配置。"""
+    if sys.platform == "win32":
+        root = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+        return root / "SalaryTimer"
+    return Path.home() / ".salary-timer"
+
+
+def migrate_legacy_user_files() -> None:
+    """首次升级时把旧版同目录配置迁到 AppData。"""
+    app_data_dir().mkdir(parents=True, exist_ok=True)
+    for name in (CONFIG_FILE, QUOTES_CACHE_FILE):
+        old_path = app_base_dir() / name
+        new_path = app_data_dir() / name
+        try:
+            if old_path.exists() and not new_path.exists():
+                shutil.copy2(old_path, new_path)
+        except Exception:
+            pass
 
 
 def parse_hhmm(value: str, fallback: str = "09:00") -> dt_time:
@@ -342,6 +365,34 @@ class JsonFetchTask(QRunnable):
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 raw = response.read().decode("utf-8-sig")
             self.signals.finished.emit(json.loads(raw))
+        except Exception as exc:
+            self.signals.failed.emit(str(exc))
+
+
+class FileDownloadSignals(QObject):
+    finished = pyqtSignal(str)
+    failed = pyqtSignal(str)
+
+
+class FileDownloadTask(QRunnable):
+    def __init__(self, url: str, target: Path):
+        super().__init__()
+        self.url = url
+        self.target = target
+        self.signals = FileDownloadSignals()
+
+    def run(self) -> None:
+        try:
+            request = urllib.request.Request(
+                self.url,
+                headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"},
+            )
+            self.target.parent.mkdir(parents=True, exist_ok=True)
+            tmp_target = self.target.with_suffix(".download")
+            with urllib.request.urlopen(request, timeout=30) as response, tmp_target.open("wb") as fp:
+                shutil.copyfileobj(response, fp)
+            tmp_target.replace(self.target)
+            self.signals.finished.emit(str(self.target))
         except Exception as exc:
             self.signals.failed.emit(str(exc))
 
@@ -849,7 +900,9 @@ class SalaryWidget(QWidget):
     def __init__(self):
         super().__init__()
         self.base_dir = app_base_dir()
-        self.config_store = ConfigStore(self.base_dir / CONFIG_FILE)
+        migrate_legacy_user_files()
+        self.data_dir = app_data_dir()
+        self.config_store = ConfigStore(self.data_dir / CONFIG_FILE)
         self.config = self.config_store.load()
         self.thread_pool = QThreadPool.globalInstance()
         self.day_type_map: Dict[str, int] = {}
@@ -911,7 +964,7 @@ class SalaryWidget(QWidget):
             "按住拖动：移动位置\n"
             "右键菜单：语录、更新、透明度、开机自启、托盘和刷新工作日\n"
             "语录会在启动和每隔半小时弹出，点击或 30 秒后隐藏\n"
-            "设置会自动保存到本地 config.json"
+            f"设置会自动保存到 {self.data_dir}"
         )
         message.setStandardButtons(QMessageBox.StandardButton.Ok)
         message.exec()
@@ -964,7 +1017,7 @@ class SalaryWidget(QWidget):
         return quotes
 
     def _load_local_quotes(self) -> List[str]:
-        for path in (self.base_dir / QUOTES_CACHE_FILE, self.base_dir / "quotes.json"):
+        for path in (self.data_dir / QUOTES_CACHE_FILE, self.base_dir / "quotes.json"):
             try:
                 if path.exists():
                     with path.open("r", encoding="utf-8-sig") as fp:
@@ -981,7 +1034,8 @@ class SalaryWidget(QWidget):
 
     def _save_quotes_cache(self, quotes: List[str]) -> None:
         try:
-            with (self.base_dir / QUOTES_CACHE_FILE).open("w", encoding="utf-8") as fp:
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            with (self.data_dir / QUOTES_CACHE_FILE).open("w", encoding="utf-8") as fp:
                 json.dump(quotes, fp, ensure_ascii=False, indent=2)
         except Exception:
             pass
@@ -1036,9 +1090,11 @@ class SalaryWidget(QWidget):
             message.setText(f"发现 v{remote_version}，当前版本 v{APP_VERSION}")
             detail = notes or "是否打开 GitHub 下载新版？"
             message.setInformativeText(f"{detail}\n\n下载地址：{download_url}")
-            message.setStandardButtons(QMessageBox.StandardButton.Open | QMessageBox.StandardButton.Cancel)
-            if message.exec() == QMessageBox.StandardButton.Open:
-                webbrowser.open(download_url)
+            install_button = message.addButton("下载并安装", QMessageBox.ButtonRole.AcceptRole)
+            message.addButton(QMessageBox.StandardButton.Cancel)
+            message.exec()
+            if message.clickedButton() == install_button:
+                self.download_and_install_update(download_url, remote_version)
         elif manual:
             QMessageBox.information(self, "检查更新", f"当前已是最新版本 v{APP_VERSION}。")
 
@@ -1055,6 +1111,61 @@ class SalaryWidget(QWidget):
         while len(parts) < 3:
             parts.append(0)
         return tuple(parts[:3])
+
+    def download_and_install_update(self, download_url: str, remote_version: str) -> None:
+        if not getattr(sys, "frozen", False):
+            QMessageBox.information(self, "自动更新", "开发运行模式下不执行自动替换，请打包后使用 exe 更新。")
+            return
+        target = Path(os.environ.get("TEMP", str(Path.home()))) / "SalaryTimerUpdate" / "SalaryTimer.exe"
+        message = QMessageBox(self)
+        message.setWindowTitle("自动更新")
+        message.setIcon(QMessageBox.Icon.Information)
+        message.setText(f"正在下载 v{remote_version}...")
+        message.setInformativeText("下载完成后会关闭当前程序、替换文件并自动打开新版。")
+        message.setStandardButtons(QMessageBox.StandardButton.NoButton)
+        message.show()
+
+        task = FileDownloadTask(download_url, target)
+        task.signals.finished.connect(lambda path: self._install_downloaded_update(Path(path), message))
+        task.signals.failed.connect(lambda error: self._on_update_download_failed(error, message))
+        self.thread_pool.start(task)
+
+    def _on_update_download_failed(self, error: str, message: QMessageBox) -> None:
+        message.close()
+        QMessageBox.warning(self, "自动更新失败", f"下载新版失败：\n{error}")
+
+    def _install_downloaded_update(self, downloaded_exe: Path, message: QMessageBox) -> None:
+        message.close()
+        current_exe = Path(sys.executable).resolve()
+        updater = downloaded_exe.parent / "install_update.cmd"
+        log_file = downloaded_exe.parent / "install_update.log"
+        script = f"""@echo off
+setlocal
+set "SRC={downloaded_exe}"
+set "DST={current_exe}"
+set "LOG={log_file}"
+echo Updating Salary Timer > "%LOG%"
+timeout /t 2 /nobreak >nul
+:waitloop
+tasklist /fi "PID eq {os.getpid()}" | find "{os.getpid()}" >nul
+if not errorlevel 1 (
+  timeout /t 1 /nobreak >nul
+  goto waitloop
+)
+copy /y "%SRC%" "%DST%" >> "%LOG%" 2>&1
+if errorlevel 1 (
+  start "" "%SRC%"
+  exit /b 1
+)
+start "" "%DST%"
+exit /b 0
+"""
+        updater.write_text(script, encoding="gbk")
+        subprocess.Popen(
+            ["cmd.exe", "/c", str(updater)],
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+        )
+        self.exit_app()
 
     def _build_window(self) -> None:
         self.setWindowTitle(APP_DISPLAY_NAME)
