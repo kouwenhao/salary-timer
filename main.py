@@ -65,7 +65,7 @@ from PyQt6.QtWidgets import (
 )
 
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 APP_NAME = "Salary Timer"
 APP_DISPLAY_NAME = f"{APP_NAME} v{APP_VERSION}"
 CONFIG_FILE = "config.json"
@@ -80,7 +80,7 @@ DEFAULT_QUOTES_URL = f"https://raw.githubusercontent.com/{GITHUB_OWNER}/{GITHUB_
 DEFAULT_UPDATE_URL = f"https://raw.githubusercontent.com/{GITHUB_OWNER}/{GITHUB_REPO}/main/update.json"
 DEFAULT_DOWNLOAD_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest/download/SalaryTimer.exe"
 QUOTES_CACHE_FILE = "quotes_cache.json"
-QUOTE_POPUP_INTERVAL_MS = 30 * 60 * 1000
+QUOTE_SCHEDULER_TICK_MS = 60 * 1000
 QUOTE_POPUP_DURATION_MS = 30 * 1000
 
 
@@ -122,6 +122,7 @@ class AppConfig:
     quotes_url: str = DEFAULT_QUOTES_URL
     update_url: str = DEFAULT_UPDATE_URL
     last_quote: str = ""
+    quote_interval_minutes: int = 30
 
     @classmethod
     def from_dict(cls, data: Dict) -> "AppConfig":
@@ -143,6 +144,7 @@ class AppConfig:
         if not isinstance(cfg.update_url, str) or not cfg.update_url.strip():
             cfg.update_url = DEFAULT_UPDATE_URL
         cfg.last_quote = str(cfg.last_quote or "")
+        cfg.quote_interval_minutes = max(1, min(240, int(cfg.quote_interval_minutes)))
         parse_hhmm(cfg.work_start, "09:00")
         parse_hhmm(cfg.work_end, "18:00")
         return cfg
@@ -165,6 +167,7 @@ class AppConfig:
             "quotes_url": self.quotes_url,
             "update_url": self.update_url,
             "last_quote": self.last_quote,
+            "quote_interval_minutes": self.quote_interval_minutes,
         }
 
 
@@ -700,6 +703,11 @@ class SettingsDialog(QDialog):
         self.display_combo.addItem("本月累计", "month")
         self.display_combo.setCurrentIndex(1 if cfg.display_mode == "month" else 0)
 
+        self.quote_interval_spin = QSpinBox(self)
+        self.quote_interval_spin.setRange(1, 240)
+        self.quote_interval_spin.setSuffix(" 分钟")
+        self.quote_interval_spin.setValue(cfg.quote_interval_minutes)
+
         self.start_edit = QTimeEdit(self)
         self.start_edit.setDisplayFormat("HH:mm")
         start = parse_hhmm(cfg.work_start, "09:00")
@@ -742,6 +750,7 @@ class SettingsDialog(QDialog):
         form.addRow("", self.manual_check)
         form.addRow("", self.auto_start_check)
         form.addRow("显示模式", self.display_combo)
+        form.addRow("语录间隔", self.quote_interval_spin)
         form.addRow("工作日", self.workdays_spin)
         form.addRow("上班时间", self.start_edit)
         form.addRow("下班时间", self.end_edit)
@@ -832,6 +841,7 @@ class SettingsDialog(QDialog):
             "window_opacity": self.opacity_slider.value() / 100.0,
             "auto_start": self.auto_start_check.isChecked(),
             "display_mode": self.display_combo.currentData(),
+            "quote_interval_minutes": int(self.quote_interval_spin.value()),
         }
 
 
@@ -854,6 +864,7 @@ class SalaryWidget(QWidget):
         self.quotes: List[str] = self._load_local_quotes()
         self.quote_bubble = QuoteBubble()
         self.quote_shown_this_session = False
+        self.next_quote_at = 0.0
         self.guide_is_open = False
         self.click_timer = QTimer(self)
         self.click_timer.setSingleShot(True)
@@ -876,8 +887,9 @@ class SalaryWidget(QWidget):
         QTimer.singleShot(1500, self._show_startup_quote)
 
         self.quote_timer = QTimer(self)
-        self.quote_timer.timeout.connect(lambda: self.show_random_quote(startup=False))
-        self.quote_timer.start(QUOTE_POPUP_INTERVAL_MS)
+        self.quote_timer.timeout.connect(self._maybe_show_scheduled_quote)
+        self.quote_timer.start(QUOTE_SCHEDULER_TICK_MS)
+        self._schedule_next_quote()
 
         QTimer.singleShot(3500, self.check_for_updates)
 
@@ -984,6 +996,20 @@ class SalaryWidget(QWidget):
         if startup:
             self.quote_shown_this_session = True
         self.quote_bubble.show_quote(quote, self)
+        if startup:
+            self._schedule_next_quote()
+
+    def _quote_interval_seconds(self) -> int:
+        return max(1, int(self.config.quote_interval_minutes)) * 60
+
+    def _schedule_next_quote(self) -> None:
+        self.next_quote_at = time.monotonic() + self._quote_interval_seconds()
+
+    def _maybe_show_scheduled_quote(self) -> None:
+        if time.monotonic() < self.next_quote_at:
+            return
+        self.show_random_quote(startup=False)
+        self._schedule_next_quote()
 
     def check_for_updates(self, manual: bool = False) -> None:
         if not self.config.update_url:
@@ -1447,6 +1473,8 @@ class SalaryWidget(QWidget):
         self.config.work_end = values["work_end"]
         self.config.auto_start = values["auto_start"]
         self.config.display_mode = values["display_mode"]
+        old_quote_interval = self.config.quote_interval_minutes
+        self.config.quote_interval_minutes = values["quote_interval_minutes"]
         self.set_opacity(values["window_opacity"], persist=False)
         self._apply_startup_setting(show_error=True)
         if self.config.manual_workdays:
@@ -1455,6 +1483,8 @@ class SalaryWidget(QWidget):
             self.config.workdays_month = ""
             self.refresh_workdays(silent=True)
         self.config_store.save(self.config)
+        if self.config.quote_interval_minutes != old_quote_interval:
+            self._schedule_next_quote()
         self.update_salary()
 
     def set_opacity(self, value: float, persist: bool = True) -> None:
