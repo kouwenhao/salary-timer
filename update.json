@@ -1,5 +1,5 @@
 {
-  "version": "1.0.2",
-  "notes": "新增一键下载并安装更新：下载后自动关闭旧版、替换 exe 并启动新版；配置迁移到 AppData，更新不再丢配置。",
-  "download_url": "https://github.com/kouwenhao/salary-timer/releases/latest/download/SalaryTimer.exe"
+  "version": "1.0.3",
+  "notes": "更新方式改为安装包：固定安装到 %LOCALAPPDATA%\\Programs\\SalaryTimer，自动创建桌面快捷方式；以后更新会下载并运行安装包，配置继续保存在 AppData。",
+  "download_url": "https://github.com/kouwenhao/salary-timer/releases/latest/download/SalaryTimerSetup.exe"
 }

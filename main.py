@@ -67,7 +67,7 @@ from PyQt6.QtWidgets import (
 )
 
 
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 APP_NAME = "Salary Timer"
 APP_DISPLAY_NAME = f"{APP_NAME} v{APP_VERSION}"
 CONFIG_FILE = "config.json"
@@ -80,7 +80,7 @@ GITHUB_OWNER = "kouwenhao"
 GITHUB_REPO = "salary-timer"
 DEFAULT_QUOTES_URL = f"https://raw.githubusercontent.com/{GITHUB_OWNER}/{GITHUB_REPO}/main/quotes.json"
 DEFAULT_UPDATE_URL = f"https://raw.githubusercontent.com/{GITHUB_OWNER}/{GITHUB_REPO}/main/update.json"
-DEFAULT_DOWNLOAD_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest/download/SalaryTimer.exe"
+DEFAULT_DOWNLOAD_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest/download/SalaryTimerSetup.exe"
 QUOTES_CACHE_FILE = "quotes_cache.json"
 QUOTE_SCHEDULER_TICK_MS = 60 * 1000
 QUOTE_POPUP_DURATION_MS = 30 * 1000
@@ -1088,7 +1088,7 @@ class SalaryWidget(QWidget):
             message.setWindowTitle("发现新版本")
             message.setIcon(QMessageBox.Icon.Information)
             message.setText(f"发现 v{remote_version}，当前版本 v{APP_VERSION}")
-            detail = notes or "是否打开 GitHub 下载新版？"
+            detail = notes or "是否下载并运行安装包？"
             message.setInformativeText(f"{detail}\n\n下载地址：{download_url}")
             install_button = message.addButton("下载并安装", QMessageBox.ButtonRole.AcceptRole)
             message.addButton(QMessageBox.StandardButton.Cancel)
@@ -1114,14 +1114,14 @@ class SalaryWidget(QWidget):
 
     def download_and_install_update(self, download_url: str, remote_version: str) -> None:
         if not getattr(sys, "frozen", False):
-            QMessageBox.information(self, "自动更新", "开发运行模式下不执行自动替换，请打包后使用 exe 更新。")
+            QMessageBox.information(self, "自动更新", "开发运行模式下不执行自动安装，请打包后使用安装包更新。")
             return
-        target = Path(os.environ.get("TEMP", str(Path.home()))) / "SalaryTimerUpdate" / "SalaryTimer.exe"
+        target = Path(os.environ.get("TEMP", str(Path.home()))) / "SalaryTimerUpdate" / "SalaryTimerSetup.exe"
         message = QMessageBox(self)
         message.setWindowTitle("自动更新")
         message.setIcon(QMessageBox.Icon.Information)
-        message.setText(f"正在下载 v{remote_version}...")
-        message.setInformativeText("下载完成后会关闭当前程序、替换文件并自动打开新版。")
+        message.setText(f"正在下载 v{remote_version} 安装包...")
+        message.setInformativeText("下载完成后会关闭当前程序、运行安装包，并从固定安装目录自动打开新版。")
         message.setStandardButtons(QMessageBox.StandardButton.NoButton)
         message.show()
 
@@ -1136,15 +1136,13 @@ class SalaryWidget(QWidget):
 
     def _install_downloaded_update(self, downloaded_exe: Path, message: QMessageBox) -> None:
         message.close()
-        current_exe = Path(sys.executable).resolve()
         updater = downloaded_exe.parent / "install_update.cmd"
         log_file = downloaded_exe.parent / "install_update.log"
         script = f"""@echo off
 setlocal
-set "SRC={downloaded_exe}"
-set "DST={current_exe}"
+set "SETUP={downloaded_exe}"
 set "LOG={log_file}"
-echo Updating Salary Timer > "%LOG%"
+echo Installing Salary Timer update > "%LOG%"
 timeout /t 2 /nobreak >nul
 :waitloop
 tasklist /fi "PID eq {os.getpid()}" | find "{os.getpid()}" >nul
@@ -1152,12 +1150,11 @@ if not errorlevel 1 (
   timeout /t 1 /nobreak >nul
   goto waitloop
 )
-copy /y "%SRC%" "%DST%" >> "%LOG%" 2>&1
+start "" /wait "%SETUP%" /SILENT /NORESTART /SUPPRESSMSGBOXES >> "%LOG%" 2>&1
 if errorlevel 1 (
-  start "" "%SRC%"
+  start "" "%SETUP%"
   exit /b 1
 )
-start "" "%DST%"
 exit /b 0
 """
         updater.write_text(script, encoding="gbk")

@@ -4,6 +4,8 @@ __pycache__/
 venv/
 build/
 dist/
+dist_installer/
+installer/
 *.spec~
 config.json
 quotes_cache.json
